@@ -1,0 +1,15 @@
+{
+  "name": "project-update-studio-slides",
+  "version": "1.0.0",
+  "description": "PowerPoint slide generator for Project Update Studio",
+  "main": "slide_generator.js",
+  "scripts": {
+    "generate": "node slide_generator.js"
+  },
+  "keywords": ["pptx", "powerpoint", "slide", "generator"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}

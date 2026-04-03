@@ -1,0 +1,12 @@
+# ignore database
+*.db
+
+# ignore all the word files
+*.docx
+
+# ignore all the ppt
+*.pptx
+
+# ignore py chache
+*.pyc
+
