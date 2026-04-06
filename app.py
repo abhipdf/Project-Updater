@@ -1666,42 +1666,47 @@ def main():
         st.session_state.nav_page = pending_nav_page
         st.session_state.pending_nav_page = None
 
-    # Sidebar navigation
-    with st.sidebar:
-        st.title(f"🎯 {get_string('app_title')}")
-        st.caption(get_string("app_subtitle"))
+    st.markdown(
+        """
+        <style>
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="collapsedControl"] {display: none;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-        st.divider()
+    st.title(f"🎯 {get_string('app_title')}")
+    st.caption(get_string("app_subtitle"))
 
-        page = st.radio(
-            "Navigate",
-            [
-                "Dashboard",
-                "Projects",
-                "Weekly Update",
-                "Slide Generator",
-                "Gantt Chart",
-                "Final Documentation",
-                "Settings",
-            ],
-            format_func=lambda x: {
-                "Dashboard": f"🏠 {get_string('nav_dashboard')}",
-                "Projects": f"📁 {get_string('nav_projects')}",
-                "Weekly Update": f"📝 {get_string('nav_weekly_update')}",
-                "Slide Generator": f"📊 {get_string('nav_slide_generator')}",
-                "Gantt Chart": f"📈 {get_string('gantt_chart_title')}",
-                "Final Documentation": f"📄 {get_string('nav_final_docs')}",
-                "Settings": f"⚙️ {get_string('nav_settings')}",
-            }.get(x, x),
-            key="nav_page",
-        )
+    page = st.radio(
+        "Navigate",
+        [
+            "Dashboard",
+            "Projects",
+            "Weekly Update",
+            "Slide Generator",
+            "Gantt Chart",
+            "Final Documentation",
+            "Settings",
+        ],
+        format_func=lambda x: {
+            "Dashboard": f"🏠 {get_string('nav_dashboard')}",
+            "Projects": f"📁 {get_string('nav_projects')}",
+            "Weekly Update": f"📝 {get_string('nav_weekly_update')}",
+            "Slide Generator": f"📊 {get_string('nav_slide_generator')}",
+            "Gantt Chart": f"📈 {get_string('gantt_chart_title')}",
+            "Final Documentation": f"📄 {get_string('nav_final_docs')}",
+            "Settings": f"⚙️ {get_string('nav_settings')}",
+        }.get(x, x),
+        key="nav_page",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.session_state.current_page = page
 
-        st.session_state.current_page = page
-
-        st.divider()
-
-        # Footer
-        st.caption(f"v1.0.0 • {get_string('language')}: {st.session_state.language.upper()}")
+    st.caption(f"v1.0.0 • {get_string('language')}: {st.session_state.language.upper()}")
+    st.divider()
 
     # Render page
     if st.session_state.current_page == "Dashboard":
