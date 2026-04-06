@@ -357,6 +357,101 @@ Return ONLY the JSON object, no explanation."""
         except Exception as e:
             raise Exception(f"Document input polishing error: {str(e)}")
 
+    def rewrite_text_fields(
+        self,
+        fields: Dict[str, str],
+        context: str = "",
+        system_prompt: str = "",
+    ) -> Dict[str, str]:
+        """Rewrite plain text fields in concise professional language."""
+        if not isinstance(fields, dict):
+            raise Exception("Fields payload must be a dictionary.")
+
+        language_name = "German" if self.language == "de" else "English"
+        normalized_fields = {
+            key: value.strip() if isinstance(value, str) else ""
+            for key, value in fields.items()
+        }
+
+        if not any(normalized_fields.values()):
+            return normalized_fields
+
+        rewrite_prompt = f"""TASK: Rewrite the following user-entered fields.
+
+LANGUAGE: {language_name}
+STYLE: Professional, short, and precise.
+CONTEXT: {context or 'Project management updates and documentation'}
+
+INPUT JSON:
+{json.dumps(normalized_fields, ensure_ascii=False)}
+
+INSTRUCTIONS:
+1. Keep the same keys and return ONLY a valid JSON object.
+2. Preserve factual meaning. Do not invent data.
+3. Improve grammar, clarity, and concise executive tone.
+4. Keep person names unchanged where possible.
+
+Return ONLY JSON."""
+
+        effective_system_prompt = system_prompt or self._build_system_prompt(
+            context="You rewrite user-entered project content into concise professional language."
+        )
+
+        try:
+            response = requests.post(
+                DEEPSEEK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": DEEPSEEK_MODEL,
+                    "messages": [
+                        {"role": "system", "content": effective_system_prompt},
+                        {"role": "user", "content": rewrite_prompt},
+                    ],
+                    "temperature": 0.3,
+                    "max_tokens": 1500,
+                },
+                timeout=30,
+            )
+
+            if response.status_code != 200:
+                error_msg = response.json().get("error", {}).get("message", str(response.status_code))
+                raise Exception(f"API error: {error_msg}")
+
+            content = response.json()["choices"][0]["message"]["content"]
+            rewritten = self._extract_json_from_response(content)
+            if not isinstance(rewritten, dict):
+                raise Exception("AI returned invalid rewrite format.")
+
+            merged = dict(normalized_fields)
+            for key in normalized_fields:
+                value = rewritten.get(key)
+                if isinstance(value, str) and value.strip():
+                    merged[key] = value.strip()
+            return merged
+
+        except Exception as e:
+            raise Exception(f"Text rewrite error: {str(e)}")
+
+    def polish_single_weekly_update(
+        self,
+        update_payload: Dict,
+        system_prompt: str,
+    ) -> Dict:
+        """Polish one weekly update payload using the document polishing schema."""
+        polished_payload = self.polish_document_inputs(
+            {"name": "", "description": "", "goal": "", "background": ""},
+            [update_payload],
+            system_prompt,
+        )
+
+        updates = polished_payload.get("updates", []) if isinstance(polished_payload, dict) else []
+        if not updates or not isinstance(updates[0], dict):
+            raise Exception("AI returned invalid weekly update polishing payload.")
+        return updates[0]
+
     def generate_project_closure_summary(
         self,
         project_brief: str,

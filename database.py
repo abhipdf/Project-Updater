@@ -242,6 +242,28 @@ def delete_team_member(member_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def replace_project_team(project_id: int, team_members: list) -> bool:
+    """Replace all team members for a project in one transaction."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM team_members WHERE project_id = ?", (project_id,))
+
+        for member in team_members or []:
+            name = (member.get("name") or "").strip()
+            if not name:
+                continue
+            cursor.execute(
+                """
+                INSERT INTO team_members (project_id, name, role)
+                VALUES (?, ?, ?)
+                """,
+                (project_id, name, (member.get("role") or "").strip()),
+            )
+
+        conn.commit()
+        return True
+
+
 # Weekly updates CRUD
 
 

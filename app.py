@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import json
 import subprocess
 import os
+import shutil
 from pathlib import Path
 import tempfile
 
@@ -34,6 +35,10 @@ def init_session_state():
         st.session_state.language = db.get_setting("language", "en")
     if "current_page" not in st.session_state:
         st.session_state.current_page = "Dashboard"
+    if "nav_page" not in st.session_state:
+        st.session_state.nav_page = st.session_state.current_page
+    if "pending_nav_page" not in st.session_state:
+        st.session_state.pending_nav_page = None
     if "interview_history" not in st.session_state:
         st.session_state.interview_history = []
     if "interview_answers" not in st.session_state:
@@ -52,6 +57,8 @@ def init_session_state():
         st.session_state.generated_brief = None
     if "project_created_name" not in st.session_state:
         st.session_state.project_created_name = None
+    if "selected_project_id" not in st.session_state:
+        st.session_state.selected_project_id = None
 
 
 init_session_state()
@@ -84,8 +91,40 @@ def show_api_key_warning():
         col1, col2 = st.columns([1, 1])
         with col2:
             if st.button(f"→ {get_string('go_to_settings')}"):
-                st.session_state.current_page = "Settings"
+                navigate_to("Settings")
                 st.rerun()
+
+
+def navigate_to(page: str, project_id: int = None):
+    """Navigate to a page and optionally set current project context."""
+    st.session_state.current_page = page
+    st.session_state.pending_nav_page = page
+    if project_id is not None:
+        st.session_state.selected_project_id = project_id
+
+
+def get_project_select_index(projects: list) -> int:
+    """Get selectbox index from stored selected project context."""
+    if not projects:
+        return 0
+    project_ids = [p["id"] for p in projects]
+    selected_project_id = st.session_state.get("selected_project_id")
+    if selected_project_id in project_ids:
+        return project_ids.index(selected_project_id)
+    return 0
+
+
+def check_node_dependencies() -> tuple[bool, str]:
+    """Check Node.js and pptxgenjs dependency for slide/gantt generation."""
+    if shutil.which("node") is None:
+        return False, get_string("missing_node")
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    pptxgen_path = os.path.join(project_root, "node_modules", "pptxgenjs")
+    if not os.path.exists(pptxgen_path):
+        return False, get_string("missing_pptxgen")
+
+    return True, ""
 
 
 def _normalize_update_for_document_ai(update: dict) -> dict:
@@ -193,7 +232,7 @@ def page_dashboard():
     with col5:
         new_proj = st.button(f"✨ {get_string('new_project')}")
         if new_proj:
-            st.session_state.current_page = "Projects"
+            navigate_to("Projects")
             st.rerun()
 
     st.divider()
@@ -231,13 +270,11 @@ def page_dashboard():
                             action_col1, action_col2 = st.columns(2)
                             with action_col1:
                                 if st.button(f"📝 {get_string('new_update')}", key=f"new_update_{project['id']}"):
-                                    st.session_state.current_page = "Weekly Update"
-                                    st.session_state.selected_project_id = project["id"]
+                                    navigate_to("Weekly Update", project["id"])
                                     st.rerun()
                             with action_col2:
                                 if st.button(f"📊 {get_string('generate_slide')}", key=f"gen_slide_{project['id']}"):
-                                    st.session_state.current_page = "Slide Generator"
-                                    st.session_state.selected_project_id = project["id"]
+                                    navigate_to("Slide Generator", project["id"])
                                     st.rerun()
     else:
         st.info(get_string("no_data"))
@@ -256,19 +293,66 @@ def page_projects():
 
         col1, col2 = st.columns(2)
         with col1:
-            project_name = st.text_input(get_string("project_name"), placeholder="e.g., Process Optimization Q2")
+            project_name = st.text_input(
+                get_string("project_name"),
+                placeholder="e.g., Process Optimization Q2",
+                key="project_name_create",
+            )
         with col2:
             project_lang = st.selectbox(get_string("select_language"), ["English", "Deutsch"])
             project_lang_code = "en" if project_lang == "English" else "de"
 
-        project_desc = st.text_area(get_string("project_description"), height=80)
-        project_goal = st.text_input(get_string("project_goal"))
-        project_bg = st.text_area(get_string("project_background"), height=60)
+        project_desc = st.text_area(get_string("project_description"), height=80, key="project_desc_create")
+        project_goal = st.text_input(get_string("project_goal"), key="project_goal_create")
+        project_bg = st.text_area(get_string("project_background"), height=60, key="project_bg_create")
+
+        rewrite_col1, rewrite_col2 = st.columns([2, 1])
+        with rewrite_col2:
+            if st.button(get_string("rewrite_with_ai"), key="rewrite_project_create", use_container_width=True):
+                if not check_api_key():
+                    show_api_key_warning()
+                else:
+                    try:
+                        ai = AIAssistant(get_api_key(), project_lang_code)
+                        st.session_state.project_create_suggestions = ai.rewrite_text_fields(
+                            {
+                                "project_name": project_name,
+                                "project_description": project_desc,
+                                "project_goal": project_goal,
+                                "project_background": project_bg,
+                            },
+                            context="Project creation form. Rewrite to professional, short, and precise style.",
+                        )
+                    except Exception:
+                        st.warning(get_string("rewrite_failed"))
+
+        if st.session_state.get("project_create_suggestions"):
+            st.info(get_string("ai_suggestions_ready"))
+            apply_col1, apply_col2 = st.columns(2)
+            with apply_col1:
+                if st.button(get_string("apply_ai_suggestions"), key="apply_project_create_suggestions", use_container_width=True):
+                    suggestions = st.session_state.get("project_create_suggestions", {})
+                    st.session_state.project_name_create = suggestions.get("project_name", st.session_state.project_name_create)
+                    st.session_state.project_desc_create = suggestions.get("project_description", st.session_state.project_desc_create)
+                    st.session_state.project_goal_create = suggestions.get("project_goal", st.session_state.project_goal_create)
+                    st.session_state.project_bg_create = suggestions.get("project_background", st.session_state.project_bg_create)
+                    st.session_state.project_create_suggestions = None
+                    st.rerun()
+            with apply_col2:
+                if st.button(get_string("discard_ai_suggestions"), key="discard_project_create_suggestions", use_container_width=True):
+                    st.session_state.project_create_suggestions = None
+                    st.rerun()
 
         # Team members
         st.subheader(get_string("team"))
         team_members = []
-        num_members = st.number_input(f"{get_string('team_members')} {get_string('n_a')}", min_value=0, max_value=20, value=1)
+        num_members = st.number_input(
+            f"{get_string('team_members')} {get_string('n_a')}",
+            min_value=0,
+            max_value=20,
+            value=1,
+            key="project_create_member_count",
+        )
 
         for i in range(num_members):
             cols = st.columns([2, 2])
@@ -296,6 +380,7 @@ def page_projects():
                 st.session_state.current_page = "Projects"
                 st.session_state.onboarding_project_id = project_id
                 st.session_state.onboarding_language = project_lang_code
+                st.session_state.project_create_suggestions = None
                 st.rerun()
             else:
                 st.error(f"❌ {get_string('project_name')} {get_string('error')}")
@@ -334,8 +419,8 @@ def page_projects():
                     action_col1, action_col2, action_col3 = st.columns(3)
                     with action_col1:
                         if st.button(f"📝 {get_string('edit_project')}", key=f"edit_{project['id']}"):
-                            # TODO: Implement edit functionality
-                            st.info("Edit functionality coming soon")
+                            st.session_state.editing_project_id = project["id"]
+                            st.rerun()
                     with action_col2:
                         if st.button(f"🔖 {get_string('archive_project')}", key=f"archive_{project['id']}"):
                             db.update_project(project["id"], status="archived")
@@ -348,6 +433,128 @@ def page_projects():
                             st.rerun()
         else:
             st.info(get_string("no_data"))
+
+    editing_project_id = st.session_state.get("editing_project_id")
+    if editing_project_id:
+        project_to_edit = db.get_project(editing_project_id)
+        if not project_to_edit:
+            st.warning(get_string("error"))
+            st.session_state.editing_project_id = None
+            st.rerun()
+
+        edit_team = db.get_project_team(editing_project_id)
+        if st.session_state.get("editing_project_loaded_id") != editing_project_id:
+            st.session_state.edit_project_name = project_to_edit.get("name", "")
+            st.session_state.edit_project_desc = project_to_edit.get("description", "")
+            st.session_state.edit_project_goal = project_to_edit.get("goal", "")
+            st.session_state.edit_project_bg = project_to_edit.get("background", "")
+            st.session_state.edit_project_lang = "English" if project_to_edit.get("language", "en") == "en" else "Deutsch"
+            st.session_state.edit_project_member_count = max(1, len(edit_team))
+            for idx, member in enumerate(edit_team):
+                st.session_state[f"edit_member_name_{idx}"] = member.get("name", "")
+                st.session_state[f"edit_member_role_{idx}"] = member.get("role", "")
+            st.session_state.editing_project_loaded_id = editing_project_id
+
+        st.divider()
+        st.subheader(f"✏️ {get_string('editing_project')}")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            edit_name = st.text_input(get_string("project_name"), key="edit_project_name")
+        with col2:
+            edit_lang_name = st.selectbox(
+                get_string("select_language"),
+                ["English", "Deutsch"],
+                key="edit_project_lang",
+            )
+        edit_lang_code = "en" if edit_lang_name == "English" else "de"
+
+        edit_desc = st.text_area(get_string("project_description"), height=80, key="edit_project_desc")
+        edit_goal = st.text_input(get_string("project_goal"), key="edit_project_goal")
+        edit_bg = st.text_area(get_string("project_background"), height=60, key="edit_project_bg")
+
+        rewrite_col1, rewrite_col2 = st.columns([2, 1])
+        with rewrite_col2:
+            if st.button(get_string("rewrite_with_ai"), key="rewrite_project_edit", use_container_width=True):
+                if not check_api_key():
+                    show_api_key_warning()
+                else:
+                    try:
+                        ai = AIAssistant(get_api_key(), edit_lang_code)
+                        st.session_state.project_edit_suggestions = ai.rewrite_text_fields(
+                            {
+                                "project_name": edit_name,
+                                "project_description": edit_desc,
+                                "project_goal": edit_goal,
+                                "project_background": edit_bg,
+                            },
+                            context="Project edit form. Rewrite to professional, short, and precise style.",
+                        )
+                    except Exception:
+                        st.warning(get_string("rewrite_failed"))
+
+        if st.session_state.get("project_edit_suggestions"):
+            st.info(get_string("ai_suggestions_ready"))
+            apply_col1, apply_col2 = st.columns(2)
+            with apply_col1:
+                if st.button(get_string("apply_ai_suggestions"), key="apply_project_edit_suggestions", use_container_width=True):
+                    suggestions = st.session_state.get("project_edit_suggestions", {})
+                    st.session_state.edit_project_name = suggestions.get("project_name", st.session_state.edit_project_name)
+                    st.session_state.edit_project_desc = suggestions.get("project_description", st.session_state.edit_project_desc)
+                    st.session_state.edit_project_goal = suggestions.get("project_goal", st.session_state.edit_project_goal)
+                    st.session_state.edit_project_bg = suggestions.get("project_background", st.session_state.edit_project_bg)
+                    st.session_state.project_edit_suggestions = None
+                    st.rerun()
+            with apply_col2:
+                if st.button(get_string("discard_ai_suggestions"), key="discard_project_edit_suggestions", use_container_width=True):
+                    st.session_state.project_edit_suggestions = None
+                    st.rerun()
+
+        st.markdown(f"**{get_string('team')}**")
+        edit_num_members = st.number_input(
+            f"{get_string('team_members')} {get_string('n_a')}",
+            min_value=0,
+            max_value=20,
+            key="edit_project_member_count",
+        )
+
+        edited_team_members = []
+        for i in range(edit_num_members):
+            cols = st.columns([2, 2])
+            with cols[0]:
+                member_name = st.text_input(get_string("team_member_name"), key=f"edit_member_name_{i}")
+            with cols[1]:
+                member_role = st.text_input(get_string("role"), key=f"edit_member_role_{i}")
+            if member_name:
+                edited_team_members.append({"name": member_name, "role": member_role})
+
+        action_col1, action_col2 = st.columns(2)
+        with action_col1:
+            if st.button(f"✅ {get_string('save_changes')}", key="save_project_edit", use_container_width=True):
+                if not edit_name.strip():
+                    st.error(f"❌ {get_string('project_name')} {get_string('error')}")
+                else:
+                    db.update_project(
+                        editing_project_id,
+                        name=edit_name.strip(),
+                        language=edit_lang_code,
+                        description=edit_desc,
+                        goal=edit_goal,
+                        background=edit_bg,
+                    )
+                    db.replace_project_team(editing_project_id, edited_team_members)
+                    st.session_state.editing_project_id = None
+                    st.session_state.editing_project_loaded_id = None
+                    st.session_state.project_edit_suggestions = None
+                    st.success(get_string("success"))
+                    st.rerun()
+
+        with action_col2:
+            if st.button(f"❌ {get_string('cancel_edit')}", key="cancel_project_edit", use_container_width=True):
+                st.session_state.editing_project_id = None
+                st.session_state.editing_project_loaded_id = None
+                st.session_state.project_edit_suggestions = None
+                st.rerun()
 
     # AI Onboarding Interview (if active)
     if "onboarding_project_id" in st.session_state:
@@ -379,6 +586,7 @@ def run_onboarding_interview(project_id: int, language: str):
 
     if q_idx < len(questions):
         st.info(f"Question {q_idx + 1}/{len(questions)}")
+        st.progress((q_idx + 1) / len(questions))
         st.write(questions[q_idx])
 
         answer = st.text_area(get_string("your_answer"), height=100, key=f"q_{q_idx}")
@@ -452,13 +660,24 @@ def page_weekly_update():
     projects = db.get_all_projects()
     if not projects:
         st.warning(get_string("no_data"))
+        st.info(get_string("no_projects_hint"))
         return
 
     selected_project_id = st.selectbox(
         get_string("select_project"),
         options=[p["id"] for p in projects],
+        index=get_project_select_index(projects),
         format_func=lambda x: next((p["name"] for p in projects if p["id"] == x), "Unknown"),
     )
+    st.session_state.selected_project_id = selected_project_id
+
+    if st.session_state.get("weekly_project_context") != selected_project_id:
+        st.session_state.weekly_project_context = selected_project_id
+        st.session_state.interview_answers = {}
+        st.session_state.interview_q_idx = 0
+        st.session_state.extracted_update = None
+        st.session_state.weekly_update_suggestion = None
+        st.session_state.editing_update_id = None
 
     project = db.get_project(selected_project_id)
     st.subheader(project["name"])
@@ -478,17 +697,33 @@ def page_weekly_update():
     current_week = utils.get_week_number()
     existing_update = db.get_weekly_update_by_week(selected_project_id, current_week)
 
-    if existing_update and "editing_update_id" not in st.session_state:
+    editing_update_id = st.session_state.get("editing_update_id")
+    is_editing_existing_week = bool(existing_update and editing_update_id == existing_update.get("id"))
+
+    if existing_update and not is_editing_existing_week:
         st.warning(get_string("duplicate_week_warning"))
         if st.button(get_string("edit_existing")):
             st.session_state.editing_update_id = existing_update["id"]
+            st.session_state.interview_q_idx = len(questions)
+            st.session_state.interview_answers = {}
+            st.session_state.extracted_update = db.get_weekly_update(existing_update["id"])
             st.rerun()
         st.stop()
+
+    if is_editing_existing_week:
+        st.info(get_string("editing_existing_week"))
+        if st.button(get_string("cancel_week_edit"), key="cancel_week_edit"):
+            st.session_state.editing_update_id = None
+            st.session_state.interview_answers = {}
+            st.session_state.interview_q_idx = 0
+            st.session_state.extracted_update = None
+            st.rerun()
 
     q_idx = st.session_state.interview_q_idx
 
     if q_idx < len(questions):
         st.info(f"Question {q_idx + 1}/{len(questions)}")
+        st.progress((q_idx + 1) / len(questions))
         st.write(questions[q_idx])
 
         answer = st.text_area(get_string("your_answer"), height=100, key=f"weekly_q_{q_idx}")
@@ -507,51 +742,52 @@ def page_weekly_update():
     else:
         st.success(get_string("interview_complete"))
 
-        # Extract data using AI
-        with st.spinner(get_string("loading")):
-            try:
-                conversation = "\n".join(
-                    [f"Q: {questions[i]}\nA: {st.session_state.interview_answers.get(i, '')}"
-                     for i in range(len(questions))]
-                )
+        if not is_editing_existing_week and st.session_state.extracted_update is None:
+            # Extract data using AI
+            with st.spinner(get_string("loading")):
+                try:
+                    conversation = "\n".join(
+                        [f"Q: {questions[i]}\nA: {st.session_state.interview_answers.get(i, '')}"
+                         for i in range(len(questions))]
+                    )
 
-                # Validate conversation has actual content
-                answered_count = sum(1 for i in range(len(questions)) if st.session_state.interview_answers.get(i, "").strip())
-                if answered_count == 0:
-                    st.warning("⚠️ No answers provided. Please answer at least one question before extracting.")
-                    st.stop()
+                    # Validate conversation has actual content
+                    answered_count = sum(1 for i in range(len(questions)) if st.session_state.interview_answers.get(i, "").strip())
+                    if answered_count == 0:
+                        st.warning("⚠️ No answers provided. Please answer at least one question before extracting.")
+                        st.stop()
 
-                # Build system prompt with context
-                previous_updates_summary = "\n".join(
-                    [f"Week {u['week_number']}: {u['ai_summary']}" for u in updates[:3]]
-                ) if updates else "No previous updates"
+                    # Build system prompt with context
+                    previous_updates_summary = "\n".join(
+                        [f"Week {u['week_number']}: {u['ai_summary']}" for u in updates[:3]]
+                    ) if updates else "No previous updates"
 
-                system_prompt = ai._build_system_prompt(
-                    project_brief=project.get("background", ""),
-                    previous_updates=previous_updates_summary,
-                )
+                    system_prompt = ai._build_system_prompt(
+                        project_brief=project.get("background", ""),
+                        previous_updates=previous_updates_summary,
+                    )
 
-                # Extract structured data
-                structured_data = ai.extract_weekly_update_data(conversation, system_prompt)
-                st.session_state.extracted_update = structured_data
+                    # Extract structured data
+                    structured_data = ai.extract_weekly_update_data(conversation, system_prompt)
+                    st.session_state.extracted_update = structured_data
 
-            except Exception as e:
-                st.error(f"❌ {get_string('error')}: {e}")
-                # Set default empty structure to allow manual entry
-                st.session_state.extracted_update = {
-                    "tasks_completed": [],
-                    "next_tasks": [],
-                    "rag_status": "green",
-                    "rag_reason": "",
-                    "management_decisions": [],
-                    "risks_blockers": [],
-                    "budget_status": "not_applicable",
-                    "budget_notes": "",
-                    "kpi_updates": [],
-                    "milestone_hit": [],
-                    "ai_summary": "",
-                }
-                st.warning("✏️ " + get_string("review_and_edit"))
+                except Exception as e:
+                    st.error(f"❌ {get_string('error')}: {e}")
+                    # Set default empty structure to allow manual entry
+                    st.session_state.extracted_update = {
+                        "tasks_completed": [],
+                        "next_tasks": [],
+                        "rag_status": "green",
+                        "rag_reason": "",
+                        "management_decisions": [],
+                        "risks_blockers": [],
+                        "budget_status": "not_applicable",
+                        "budget_notes": "",
+                        "kpi_updates": [],
+                        "milestone_hit": [],
+                        "ai_summary": "",
+                    }
+                    st.warning("✏️ " + get_string("review_and_edit"))
 
         # Show review and edit interface
         if "extracted_update" in st.session_state and st.session_state.extracted_update is not None:
@@ -600,14 +836,71 @@ def page_weekly_update():
 
             with col2:
                 st.markdown(f"**Budget:** {data.get('budget_status', 'n/a')}")
+                budget_options = ["not_applicable", "on_track", "over", "under"]
+                budget_value = data.get("budget_status", "not_applicable")
+                if budget_value not in budget_options:
+                    budget_value = "not_applicable"
                 data["budget_status"] = st.selectbox(
                     "Budget Status",
-                    options=["not_applicable", "on_track", "over", "under"],
-                    index=["not_applicable", "on_track", "over", "under"].index(data.get("budget_status", "not_applicable")),
+                    options=budget_options,
+                    index=budget_options.index(budget_value),
                     key="budget_override",
                 )
 
             data["ai_summary"] = st.text_area("Executive Summary", value=data.get("ai_summary", ""), key="summary_edit")
+            data["budget_notes"] = st.text_area("Budget Notes", value=data.get("budget_notes", ""), key="budget_notes_edit")
+
+            if st.button(get_string("rewrite_with_ai"), key="rewrite_weekly_review", use_container_width=True):
+                try:
+                    polish_system_prompt = ai._build_system_prompt(
+                        project_brief=project.get("background", ""),
+                        previous_updates="\n".join(
+                            [f"Week {u.get('week_number')}: {u.get('ai_summary', '')}" for u in updates[:5]]
+                        ),
+                        context="Polish one weekly update for concise, professional executive communication.",
+                    )
+                    suggestion = ai.polish_single_weekly_update(
+                        {
+                            "ai_summary": data.get("ai_summary", ""),
+                            "tasks_completed": data.get("tasks_completed", []),
+                            "next_tasks": data.get("next_tasks", []),
+                            "management_decisions": data.get("management_decisions", []),
+                            "risks_blockers": data.get("risks_blockers", []),
+                            "kpi_updates": data.get("kpi_updates", []),
+                            "milestone_hit": data.get("milestone_hit", []),
+                            "budget_notes": data.get("budget_notes", ""),
+                        },
+                        polish_system_prompt,
+                    )
+                    st.session_state.weekly_update_suggestion = suggestion
+                except Exception:
+                    st.warning(get_string("rewrite_failed"))
+
+            if st.session_state.get("weekly_update_suggestion"):
+                st.info(get_string("ai_suggestions_ready"))
+                apply_col1, apply_col2 = st.columns(2)
+                with apply_col1:
+                    if st.button(get_string("apply_ai_suggestions"), key="apply_weekly_suggestions", use_container_width=True):
+                        suggestion = st.session_state.get("weekly_update_suggestion", {})
+                        for key in [
+                            "ai_summary",
+                            "tasks_completed",
+                            "next_tasks",
+                            "management_decisions",
+                            "risks_blockers",
+                            "kpi_updates",
+                            "milestone_hit",
+                            "budget_notes",
+                        ]:
+                            if key in suggestion:
+                                data[key] = suggestion[key]
+                        st.session_state.extracted_update = data
+                        st.session_state.weekly_update_suggestion = None
+                        st.rerun()
+                with apply_col2:
+                    if st.button(get_string("discard_ai_suggestions"), key="discard_weekly_suggestions", use_container_width=True):
+                        st.session_state.weekly_update_suggestion = None
+                        st.rerun()
 
             # Save button
             if st.button(f"✅ {get_string('save_update')}", use_container_width=True):
@@ -615,20 +908,37 @@ def page_weekly_update():
                 year = datetime.now().year
                 week_label = utils.get_week_label(current_week, st.session_state.language, year)
 
-                update_id = db.create_weekly_update(
-                    project_id=selected_project_id,
-                    week_number=current_week,
-                    week_label=week_label,
-                    rag_status=data.get("rag_status", "green"),
-                    tasks_completed=json.dumps(data.get("tasks_completed", [])),
-                    next_tasks=json.dumps(data.get("next_tasks", [])),
-                    management_decisions=json.dumps(data.get("management_decisions", [])),
-                    risks_blockers=json.dumps(data.get("risks_blockers", [])),
-                    budget_status=data.get("budget_status", "not_applicable"),
-                    milestone_hit=json.dumps(data.get("milestone_hit", [])),
-                    kpi_updates=json.dumps(data.get("kpi_updates", [])),
-                    ai_summary=st.session_state.extracted_update.get("ai_summary", ""),
-                )
+                if is_editing_existing_week and editing_update_id:
+                    db.update_weekly_update(
+                        editing_update_id,
+                        week_label=week_label,
+                        rag_status=data.get("rag_status", "green"),
+                        tasks_completed=data.get("tasks_completed", []),
+                        next_tasks=data.get("next_tasks", []),
+                        management_decisions=data.get("management_decisions", []),
+                        risks_blockers=data.get("risks_blockers", []),
+                        budget_status=data.get("budget_status", "not_applicable"),
+                        budget_notes=data.get("budget_notes", ""),
+                        milestone_hit=data.get("milestone_hit", []),
+                        kpi_updates=data.get("kpi_updates", []),
+                        ai_summary=data.get("ai_summary", ""),
+                    )
+                else:
+                    db.create_weekly_update(
+                        project_id=selected_project_id,
+                        week_number=current_week,
+                        week_label=week_label,
+                        rag_status=data.get("rag_status", "green"),
+                        tasks_completed=json.dumps(data.get("tasks_completed", [])),
+                        next_tasks=json.dumps(data.get("next_tasks", [])),
+                        management_decisions=json.dumps(data.get("management_decisions", [])),
+                        risks_blockers=json.dumps(data.get("risks_blockers", [])),
+                        budget_status=data.get("budget_status", "not_applicable"),
+                        budget_notes=data.get("budget_notes", ""),
+                        milestone_hit=json.dumps(data.get("milestone_hit", [])),
+                        kpi_updates=json.dumps(data.get("kpi_updates", [])),
+                        ai_summary=data.get("ai_summary", ""),
+                    )
 
                 # Update project RAG status
                 db.update_project(selected_project_id, rag_status=data.get("rag_status", "green"))
@@ -639,6 +949,8 @@ def page_weekly_update():
                 st.session_state.interview_answers = {}
                 st.session_state.interview_q_idx = 0
                 st.session_state.extracted_update = None
+                st.session_state.weekly_update_suggestion = None
+                st.session_state.editing_update_id = None
 
                 st.rerun()
 
@@ -653,20 +965,28 @@ def page_slide_generator():
     projects = db.get_all_projects()
     if not projects:
         st.warning(get_string("no_data"))
+        st.info(get_string("no_projects_hint"))
         return
 
     selected_project_id = st.selectbox(
         get_string("select_project"),
         options=[p["id"] for p in projects],
+        index=get_project_select_index(projects),
         format_func=lambda x: next((p["name"] for p in projects if p["id"] == x), "Unknown"),
     )
+    st.session_state.selected_project_id = selected_project_id
 
     project = db.get_project(selected_project_id)
     updates = db.get_project_updates(selected_project_id)
 
     if not updates:
         st.warning(f"No updates for {project['name']}")
+        st.info(get_string("no_updates_hint"))
         return
+
+    node_ready, node_message = check_node_dependencies()
+    if not node_ready:
+        st.warning(node_message)
 
     selected_week_idx = st.selectbox(
         get_string("select_week"),
@@ -676,7 +996,7 @@ def page_slide_generator():
 
     selected_update = updates[selected_week_idx]
 
-    if st.button(f"✨ {get_string('generate_slide')}", use_container_width=True):
+    if st.button(f"✨ {get_string('generate_slide')}", use_container_width=True, disabled=not node_ready):
         with st.spinner(get_string("loading")):
             try:
                 # Prepare slide data
@@ -769,13 +1089,16 @@ def page_final_documentation():
     projects = db.get_all_projects()
     if not projects:
         st.warning(get_string("no_data"))
+        st.info(get_string("no_projects_hint"))
         return
 
     selected_project_id = st.selectbox(
         get_string("select_project"),
         options=[p["id"] for p in projects],
+        index=get_project_select_index(projects),
         format_func=lambda x: next((p["name"] for p in projects if p["id"] == x), "Unknown"),
     )
+    st.session_state.selected_project_id = selected_project_id
 
     project = db.get_project(selected_project_id)
     team = db.get_project_team(selected_project_id)
@@ -783,6 +1106,7 @@ def page_final_documentation():
 
     if not updates:
         st.warning(f"No updates for {project['name']}")
+        st.info(get_string("no_updates_hint"))
         return
 
     if not check_api_key():
@@ -870,17 +1194,21 @@ def page_gantt_chart():
     projects = db.get_all_projects()
     if not projects:
         st.warning(get_string("no_data"))
+        st.info(get_string("no_projects_hint"))
         return
 
     selected_project_id = st.selectbox(
         get_string("select_project"),
         options=[p["id"] for p in projects],
+        index=get_project_select_index(projects),
         format_func=lambda x: next((p["name"] for p in projects if p["id"] == x), "Unknown"),
     )
+    st.session_state.selected_project_id = selected_project_id
 
     project = db.get_project(selected_project_id)
     team = db.get_project_team(selected_project_id)
     gantt_tasks = db.get_gantt_tasks(selected_project_id)
+    project_updates = db.get_project_updates(selected_project_id)
 
     # Tabs for managing and generating gantt chart
     tab1, tab2 = st.tabs([get_string("gantt_tasks"), get_string("generate_gantt")])
@@ -892,8 +1220,14 @@ def page_gantt_chart():
         col1, col2 = st.columns([2, 1])
         with col1:
             st.write(get_string("gantt_no_tasks") if not gantt_tasks else f"✅ {len(gantt_tasks)} tasks defined")
+            if not project_updates:
+                st.caption(get_string("no_updates_hint"))
         with col2:
-            if st.button(f"🔄 {get_string('auto_generate_gantt')}", use_container_width=True):
+            if st.button(
+                f"🔄 {get_string('auto_generate_gantt')}",
+                use_container_width=True,
+                disabled=not bool(project_updates),
+            ):
                 with st.spinner(get_string("loading")):
                     result = auto_generate_gantt_from_tasks(selected_project_id)
                     if result["success"]:
@@ -974,6 +1308,32 @@ def page_gantt_chart():
                     key="milestone_date_input"
                 )
 
+        if st.button(get_string("rewrite_with_ai"), key="rewrite_gantt_task", use_container_width=True):
+            if not check_api_key():
+                show_api_key_warning()
+            else:
+                try:
+                    ai = AIAssistant(get_api_key(), project.get("language", "en"))
+                    st.session_state.gantt_task_suggestion = ai.rewrite_text_fields(
+                        {"task_name": task_name},
+                        context="Gantt chart task naming. Keep concise and professional.",
+                    )
+                except Exception:
+                    st.warning(get_string("rewrite_failed"))
+
+        if st.session_state.get("gantt_task_suggestion"):
+            st.info(get_string("ai_suggestions_ready"))
+            apply_col1, apply_col2 = st.columns(2)
+            with apply_col1:
+                if st.button(get_string("apply_ai_suggestions"), key="apply_gantt_suggestion", use_container_width=True):
+                    st.session_state.task_name_input = st.session_state.gantt_task_suggestion.get("task_name", task_name)
+                    st.session_state.gantt_task_suggestion = None
+                    st.rerun()
+            with apply_col2:
+                if st.button(get_string("discard_ai_suggestions"), key="discard_gantt_suggestion", use_container_width=True):
+                    st.session_state.gantt_task_suggestion = None
+                    st.rerun()
+
         # Team members for task
         team_names = [t["name"] for t in team]
         task_team = st.multiselect(
@@ -1024,13 +1384,17 @@ def page_gantt_chart():
     with tab2:
         st.subheader(get_string("generate_gantt"))
 
+        node_ready, node_message = check_node_dependencies()
+        if not node_ready:
+            st.warning(node_message)
+
         if not gantt_tasks:
             st.warning(get_string("gantt_no_tasks"))
             st.info("💡 Use the 'Auto-Generate' button to create tasks from your latest weekly update.")
         else:
             st.write(f"📊 Ready to generate Gantt chart with {len(gantt_tasks)} tasks")
 
-            if st.button(f"✨ {get_string('generate_gantt')}", use_container_width=True):
+            if st.button(f"✨ {get_string('generate_gantt')}", use_container_width=True, disabled=not node_ready):
                 with st.spinner(get_string("loading")):
                     result = generate_gantt_chart_from_tasks(selected_project_id, project["name"])
 
@@ -1127,8 +1491,12 @@ def page_settings():
 
     # Reset Data
     st.subheader(f"🔴 {get_string('reset_data')}")
-    if st.checkbox(get_string("reset_confirm")):
+    if st.checkbox(get_string("reset_confirm"), key="reset_confirm_checkbox"):
+        confirm_word = st.text_input("Type RESET to confirm", key="reset_confirm_word")
         if st.button(f"⚠️ {get_string('reset_data')}", key="reset_btn"):
+            if confirm_word.strip().upper() != "RESET":
+                st.error("Please type RESET to confirm.")
+                return
             # Delete database
             if os.path.exists("project_updates.db"):
                 os.remove("project_updates.db")
@@ -1140,6 +1508,12 @@ def page_settings():
 
 def main():
     """Main app."""
+    pending_nav_page = st.session_state.get("pending_nav_page")
+    if pending_nav_page:
+        st.session_state.current_page = pending_nav_page
+        st.session_state.nav_page = pending_nav_page
+        st.session_state.pending_nav_page = None
+
     # Sidebar navigation
     with st.sidebar:
         st.title(f"🎯 {get_string('app_title')}")
@@ -1167,6 +1541,7 @@ def main():
                 "Final Documentation": f"📄 {get_string('nav_final_docs')}",
                 "Settings": f"⚙️ {get_string('nav_settings')}",
             }.get(x, x),
+            key="nav_page",
         )
 
         st.session_state.current_page = page
