@@ -11,6 +11,8 @@ Project Update Studio is designed for operations and process improvement project
 ✅ **AI-Powered Weekly Interviews** — Let an AI assistant guide you through structured interviews to capture all project information  
 ✅ **Automatic PowerPoint Generation** — Generate professional single-slide weekly updates with all key information  
 ✅ **Comprehensive Documentation** — Create multi-section Word documents summarizing the entire project lifecycle  
+✅ **Project Artifacts Manager** — Capture links and reference notes with short descriptions for final documentation  
+✅ **Artifact Editing & Ordering** — Edit saved artifacts and choose output order (newest, oldest, title) before export  
 ✅ **Multi-Language Support** — Full English and German language support throughout the app and generated documents  
 ✅ **Project Management Dashboard** — Visual overview of all active projects with RAG (Red/Amber/Green) status tracking  
 ✅ **DeepSeek AI Integration** — Uses DeepSeek API for intelligent interview guidance and content generation  
@@ -92,6 +94,8 @@ The app will open in your default browser at `http://localhost:8501`
 4. Answer the **AI Onboarding Interview** questions (8 questions about your project)
 5. Review and confirm the generated project brief
 6. Click **Confirm & Save**
+7. Open the project card and add **Artifacts** (links/references with short descriptions)
+8. Edit or delete artifacts anytime from the same project card
 
 ### 2. Create Your First Weekly Update
 
@@ -122,8 +126,9 @@ The slide includes:
 
 1. Click **Final Documentation** (📄) in the sidebar
 2. Select your project
-3. Click **Generate Documentation**
-4. Download the Word document (`.docx`)
+3. Choose optional **artifact ordering** (newest, oldest, title)
+4. Click **Generate Documentation**
+5. Download the Word document (`.docx`)
 
 The document includes:
 - Cover page with project info
@@ -132,6 +137,7 @@ The document includes:
 - Key milestones & achievements
 - Decisions log
 - Risks & issues log
+- Artifacts & references section
 - AI-generated project closure summary
 
 ---
@@ -175,6 +181,12 @@ Stores all weekly status update data:
 id, project_id, week_number, week_label, rag_status, tasks_completed, next_tasks,
 management_decisions, risks_blockers, budget_status, budget_notes, milestone_hit,
 kpi_updates, stakeholder_notes, ai_summary, created_at
+```
+
+### Project Artifacts Table
+Stores project-level links and references for final documentation:
+```
+id, project_id, artifact_type, title, url, description, created_at
 ```
 
 ### Settings Table
@@ -223,9 +235,10 @@ Generate professional PowerPoint slides:
 ### 📄 Final Documentation
 Generate comprehensive Word documents:
 - Multi-section format with professional styling
-- Sections: Overview, Weekly Log, Milestones, Decisions, Risks, Closure Summary
+- Sections: Overview, Weekly Log, Milestones, Decisions, Risks, Artifacts, Closure Summary
 - AI-generated project closure summary
 - All updates and decisions compiled with week references
+- Includes project-level links/references captured in the Projects page
 - Professional styling with ocean blue headings, page numbers, headers
 
 ### ⚙️ Settings

@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 DB_FILE = "project_updates.db"
+ALLOWED_ARTIFACT_TYPES = {"link", "reference"}
 
 
 @contextmanager
@@ -93,6 +94,20 @@ def init_db():
                 milestone_date TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Project artifacts table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS project_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                artifact_type TEXT NOT NULL CHECK(artifact_type IN ('link', 'reference')),
+                title TEXT NOT NULL,
+                url TEXT,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
             )
         """)
@@ -202,6 +217,117 @@ def delete_project(project_id: int) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def create_project_artifact(
+    project_id: int,
+    artifact_type: str,
+    title: str,
+    url: str = "",
+    description: str = "",
+) -> int:
+    """Create a project artifact and return artifact ID."""
+    normalized_type = (artifact_type or "").strip().lower()
+    normalized_title = (title or "").strip()
+    normalized_url = (url or "").strip()
+    normalized_description = (description or "").strip()[:200]
+
+    if normalized_type not in ALLOWED_ARTIFACT_TYPES:
+        raise ValueError("Invalid artifact type.")
+
+    if not normalized_title:
+        raise ValueError("Artifact title is required.")
+
+    if normalized_type == "link" and not normalized_url:
+        raise ValueError("URL is required for link artifacts.")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute(
+            """
+            INSERT INTO project_artifacts
+            (project_id, artifact_type, title, url, description, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                normalized_type,
+                normalized_title,
+                normalized_url,
+                normalized_description,
+                now,
+            ),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def update_project_artifact(
+    artifact_id: int,
+    artifact_type: str,
+    title: str,
+    url: str = "",
+    description: str = "",
+) -> bool:
+    """Update a project artifact."""
+    normalized_type = (artifact_type or "").strip().lower()
+    normalized_title = (title or "").strip()
+    normalized_url = (url or "").strip()
+    normalized_description = (description or "").strip()[:200]
+
+    if normalized_type not in ALLOWED_ARTIFACT_TYPES:
+        raise ValueError("Invalid artifact type.")
+
+    if not normalized_title:
+        raise ValueError("Artifact title is required.")
+
+    if normalized_type == "link" and not normalized_url:
+        raise ValueError("URL is required for link artifacts.")
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE project_artifacts
+            SET artifact_type = ?, title = ?, url = ?, description = ?
+            WHERE id = ?
+            """,
+            (
+                normalized_type,
+                normalized_title,
+                normalized_url,
+                normalized_description,
+                artifact_id,
+            ),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_project_artifacts(project_id: int) -> list:
+    """Get all artifacts for a project."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM project_artifacts
+            WHERE project_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (project_id,),
+        )
+        rows = cursor.fetchall()
+        return [dict(row) for row in rows]
+
+
+def delete_project_artifact(artifact_id: int) -> bool:
+    """Delete a project artifact."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM project_artifacts WHERE id = ?", (artifact_id,))
         conn.commit()
         return cursor.rowcount > 0
 

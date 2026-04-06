@@ -6,6 +6,9 @@ Generates comprehensive project documentation.
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from datetime import datetime
 from utils import COLORS, format_date, format_datetime, safe_json_parse, get_string
 from typing import List, Dict
@@ -18,6 +21,36 @@ def hex_to_rgb(hex_color: str) -> tuple:
     return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
 
+def add_hyperlink(paragraph, url: str, text: str):
+    """Add a clickable hyperlink to a paragraph."""
+    part = paragraph.part
+    relationship_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), relationship_id)
+
+    run = OxmlElement("w:r")
+    run_properties = OxmlElement("w:rPr")
+
+    # Style link similar to default Word hyperlink style.
+    color = OxmlElement("w:color")
+    color.set(qn("w:val"), "0563C1")
+    run_properties.append(color)
+
+    underline = OxmlElement("w:u")
+    underline.set(qn("w:val"), "single")
+    run_properties.append(underline)
+
+    run.append(run_properties)
+
+    text_element = OxmlElement("w:t")
+    text_element.text = text
+    run.append(text_element)
+    hyperlink.append(run)
+
+    paragraph._p.append(hyperlink)
+
+
 def generate_project_documentation(
     project: Dict,
     team_members: List[Dict],
@@ -25,6 +58,7 @@ def generate_project_documentation(
     ai_closure_summary: str,
     language: str = "en",
     filepath: str = None,
+    project_artifacts: List[Dict] = None,
 ) -> str:
     """Generate comprehensive Word document for a project.
     
@@ -35,6 +69,7 @@ def generate_project_documentation(
         ai_closure_summary: AI-generated project closure summary
         language: Language code (en/de)
         filepath: Output file path
+        project_artifacts: List of project-level artifacts and references
         
     Returns:
         Path to generated file
@@ -313,9 +348,34 @@ def generate_project_documentation(
 
     doc.add_page_break()
 
-    # === SECTION 6: FINAL SUMMARY ===
-    heading6 = doc.add_heading(get_string("executive_summary", language), level=1)
+    # === SECTION 6: ARTIFACTS & REFERENCES ===
+    heading6 = doc.add_heading(get_string("artifacts_section", language), level=1)
     heading6.runs[0].font.color.rgb = RGBColor(*dark_rgb)
+
+    artifacts = project_artifacts or []
+    if artifacts:
+        for artifact in artifacts:
+            artifact_type = artifact.get("artifact_type", "reference")
+            type_label = get_string(f"artifact_{artifact_type}", language)
+            title = (artifact.get("title") or "").strip() or get_string("no_data", language)
+
+            para = doc.add_paragraph(style="List Bullet")
+            para.add_run(title).bold = True
+            para.add_run(f" ({type_label})")
+
+            if artifact.get("url"):
+                url_paragraph = doc.add_paragraph("URL: ", style="Normal")
+                add_hyperlink(url_paragraph, artifact["url"], artifact["url"])
+            if artifact.get("description"):
+                doc.add_paragraph(artifact["description"], style="Normal")
+    else:
+        doc.add_paragraph(get_string("no_data", language))
+
+    doc.add_page_break()
+
+    # === SECTION 7: FINAL SUMMARY ===
+    heading7 = doc.add_heading(get_string("executive_summary", language), level=1)
+    heading7.runs[0].font.color.rgb = RGBColor(*dark_rgb)
 
     if ai_closure_summary:
         doc.add_paragraph(ai_closure_summary)

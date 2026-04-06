@@ -114,6 +114,16 @@ def get_project_select_index(projects: list) -> int:
     return 0
 
 
+def sort_artifacts_for_doc(artifacts: list, order_mode: str) -> list:
+    """Sort artifacts for final documentation export."""
+    if order_mode == "oldest":
+        return sorted(artifacts, key=lambda a: (a.get("created_at", ""), a.get("id", 0)))
+    if order_mode == "title":
+        return sorted(artifacts, key=lambda a: (a.get("title", "").lower(), a.get("id", 0)))
+    # Default: newest first
+    return sorted(artifacts, key=lambda a: (a.get("created_at", ""), a.get("id", 0)), reverse=True)
+
+
 def check_node_dependencies() -> tuple[bool, str]:
     """Check Node.js and pptxgenjs dependency for slide/gantt generation."""
     if shutil.which("node") is None:
@@ -414,6 +424,139 @@ def page_projects():
                         for member in team:
                             role_text = f" ({member['role']})" if member.get("role") else ""
                             st.caption(f"• {member['name']}{role_text}")
+
+                    st.markdown(f"**{get_string('artifact_manager')}:**")
+                    project_artifacts = db.get_project_artifacts(project["id"])
+                    if project_artifacts:
+                        for artifact in project_artifacts:
+                            with st.container(border=True):
+                                type_key = f"artifact_{artifact.get('artifact_type', 'reference')}"
+                                type_label = get_string(type_key)
+                                st.markdown(f"**{artifact.get('title', '')}** ({type_label})")
+                                if artifact.get("url"):
+                                    st.markdown(f"[{artifact['url']}]({artifact['url']})")
+                                if artifact.get("description"):
+                                    st.caption(artifact["description"])
+                                action_col1, action_col2 = st.columns(2)
+                                with action_col1:
+                                    if st.button(
+                                        f"✏️ {get_string('edit_artifact')}",
+                                        key=f"edit_artifact_{artifact['id']}",
+                                    ):
+                                        st.session_state.editing_artifact_id = artifact["id"]
+                                        st.rerun()
+                                with action_col2:
+                                    if st.button(
+                                        f"🗑️ {get_string('delete_artifact')}",
+                                        key=f"delete_artifact_{artifact['id']}",
+                                    ):
+                                        db.delete_project_artifact(artifact["id"])
+                                        if st.session_state.get("editing_artifact_id") == artifact["id"]:
+                                            st.session_state.editing_artifact_id = None
+                                        st.success(get_string("artifact_deleted"))
+                                        st.rerun()
+
+                                if st.session_state.get("editing_artifact_id") == artifact["id"]:
+                                    with st.form(key=f"edit_artifact_form_{artifact['id']}"):
+                                        edit_artifact_type = st.selectbox(
+                                            get_string("artifact_type"),
+                                            options=["link", "reference"],
+                                            index=0 if artifact.get("artifact_type") == "link" else 1,
+                                            format_func=lambda x: get_string(f"artifact_{x}"),
+                                            key=f"edit_artifact_type_{artifact['id']}",
+                                        )
+                                        edit_artifact_title = st.text_input(
+                                            get_string("artifact_title"),
+                                            value=artifact.get("title", ""),
+                                            key=f"edit_artifact_title_{artifact['id']}",
+                                        )
+                                        edit_artifact_url = st.text_input(
+                                            get_string("artifact_url"),
+                                            value=artifact.get("url", ""),
+                                            key=f"edit_artifact_url_{artifact['id']}",
+                                        )
+                                        edit_artifact_description = st.text_area(
+                                            get_string("artifact_description"),
+                                            value=artifact.get("description", ""),
+                                            max_chars=200,
+                                            key=f"edit_artifact_desc_{artifact['id']}",
+                                        )
+
+                                        save_col, cancel_col = st.columns(2)
+                                        with save_col:
+                                            save_edit = st.form_submit_button(
+                                                f"✅ {get_string('save_artifact_changes')}",
+                                                use_container_width=True,
+                                            )
+                                        with cancel_col:
+                                            cancel_edit = st.form_submit_button(
+                                                f"❌ {get_string('cancel_artifact_edit')}",
+                                                use_container_width=True,
+                                            )
+
+                                    if save_edit:
+                                        try:
+                                            db.update_project_artifact(
+                                                artifact_id=artifact["id"],
+                                                artifact_type=edit_artifact_type,
+                                                title=edit_artifact_title,
+                                                url=edit_artifact_url,
+                                                description=edit_artifact_description,
+                                            )
+                                            st.session_state.editing_artifact_id = None
+                                            st.success(get_string("artifact_updated"))
+                                            st.rerun()
+                                        except ValueError as e:
+                                            st.error(f"❌ {e}")
+                                    elif cancel_edit:
+                                        st.session_state.editing_artifact_id = None
+                                        st.rerun()
+                    else:
+                        st.caption(get_string("no_artifacts"))
+
+                    with st.expander(get_string("add_artifact")):
+                        artifact_type = st.selectbox(
+                            get_string("artifact_type"),
+                            options=["link", "reference"],
+                            format_func=lambda x: get_string(f"artifact_{x}"),
+                            key=f"artifact_type_{project['id']}",
+                        )
+                        artifact_title = st.text_input(
+                            get_string("artifact_title"),
+                            key=f"artifact_title_{project['id']}",
+                        )
+                        artifact_url = st.text_input(
+                            get_string("artifact_url"),
+                            key=f"artifact_url_{project['id']}",
+                        )
+                        artifact_description = st.text_area(
+                            get_string("artifact_description"),
+                            max_chars=200,
+                            key=f"artifact_desc_{project['id']}",
+                        )
+
+                        if st.button(
+                            f"➕ {get_string('add_artifact')}",
+                            key=f"add_artifact_btn_{project['id']}",
+                            use_container_width=True,
+                        ):
+                            if not artifact_title.strip():
+                                st.error(f"❌ {get_string('artifact_title_required')}")
+                            elif artifact_type == "link" and not artifact_url.strip():
+                                st.error(f"❌ {get_string('artifact_url_required')}")
+                            else:
+                                try:
+                                    db.create_project_artifact(
+                                        project_id=project["id"],
+                                        artifact_type=artifact_type,
+                                        title=artifact_title,
+                                        url=artifact_url,
+                                        description=artifact_description,
+                                    )
+                                    st.success(get_string("artifact_added"))
+                                    st.rerun()
+                                except ValueError as e:
+                                    st.error(f"❌ {e}")
 
                     # Actions
                     action_col1, action_col2, action_col3 = st.columns(3)
@@ -1103,6 +1246,13 @@ def page_final_documentation():
     project = db.get_project(selected_project_id)
     team = db.get_project_team(selected_project_id)
     updates = db.get_project_updates(selected_project_id)
+    artifacts = db.get_project_artifacts(selected_project_id)
+
+    artifact_order_mode = st.selectbox(
+        get_string("artifact_order"),
+        options=["newest", "oldest", "title"],
+        format_func=lambda x: get_string(f"artifact_order_{x}"),
+    )
 
     if not updates:
         st.warning(f"No updates for {project['name']}")
@@ -1162,12 +1312,14 @@ def page_final_documentation():
                 )
 
                 # Generate document
+                sorted_artifacts = sort_artifacts_for_doc(artifacts, artifact_order_mode)
                 filepath = generate_project_documentation(
                     project=project_for_doc,
                     team_members=team,
                     all_updates=updates_for_doc,
                     ai_closure_summary=ai_summary,
                     language=project.get("language", "en"),
+                    project_artifacts=sorted_artifacts,
                 )
 
                 st.success(get_string("doc_generated"))
