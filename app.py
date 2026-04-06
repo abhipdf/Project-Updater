@@ -8,6 +8,7 @@ import database as db
 import utils
 from ai_assistant import AIAssistant
 from doc_generator import generate_project_documentation
+from gantt_generator import generate_gantt_chart_from_tasks, auto_generate_gantt_from_tasks
 from datetime import datetime, timedelta
 import json
 import subprocess
@@ -860,6 +861,195 @@ def page_final_documentation():
                 st.error(f"❌ {e}")
 
 
+# ============= PAGE: GANTT CHART =============
+
+def page_gantt_chart():
+    """Gantt Chart Generator page."""
+    st.title(f"📊 {get_string('gantt_chart_title')}")
+
+    projects = db.get_all_projects()
+    if not projects:
+        st.warning(get_string("no_data"))
+        return
+
+    selected_project_id = st.selectbox(
+        get_string("select_project"),
+        options=[p["id"] for p in projects],
+        format_func=lambda x: next((p["name"] for p in projects if p["id"] == x), "Unknown"),
+    )
+
+    project = db.get_project(selected_project_id)
+    team = db.get_project_team(selected_project_id)
+    gantt_tasks = db.get_gantt_tasks(selected_project_id)
+
+    # Tabs for managing and generating gantt chart
+    tab1, tab2 = st.tabs([get_string("gantt_tasks"), get_string("generate_gantt")])
+
+    with tab1:
+        st.subheader(get_string("gantt_tasks"))
+
+        # Auto-generate button
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.write(get_string("gantt_no_tasks") if not gantt_tasks else f"✅ {len(gantt_tasks)} tasks defined")
+        with col2:
+            if st.button(f"🔄 {get_string('auto_generate_gantt')}", use_container_width=True):
+                with st.spinner(get_string("loading")):
+                    result = auto_generate_gantt_from_tasks(selected_project_id)
+                    if result["success"]:
+                        st.success(result["message"])
+                        st.rerun()
+                    else:
+                        st.warning(result["message"])
+
+        st.divider()
+
+        # Display existing tasks
+        if gantt_tasks:
+            st.subheader("📋 Tasks Overview")
+            for task in gantt_tasks:
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    with col1:
+                        st.write(f"**{task['name']}**")
+                        if task["task_type"] == "milestone":
+                            st.caption(f"🎯 Milestone: {task['milestone_date']}")
+                        else:
+                            st.caption(f"📅 {task['start_date']} → {task['end_date']}")
+                            if task.get("team_members"):
+                                st.caption(f"👥 {', '.join(task['team_members'])}")
+                    with col2:
+                        if st.button("✏️", key=f"edit_task_{task['id']}", help="Edit"):
+                            st.session_state.editing_task_id = task["id"]
+                            st.rerun()
+                    with col3:
+                        if st.button("🗑️", key=f"delete_task_{task['id']}", help="Delete"):
+                            db.delete_gantt_task(task["id"])
+                            st.success("Task deleted")
+                            st.rerun()
+
+            st.divider()
+
+        # Add/Edit task form
+        st.subheader(f"➕ {get_string('add_task')}")
+
+        editing_task_id = st.session_state.get("editing_task_id")
+        editing_task = None
+        if editing_task_id:
+            for task in gantt_tasks:
+                if task["id"] == editing_task_id:
+                    editing_task = task
+                    break
+
+        col1, col2 = st.columns(2)
+        with col1:
+            task_name = st.text_input(
+                get_string("task_name"),
+                value=editing_task["name"] if editing_task else "",
+                key="task_name_input"
+            )
+            task_type = st.selectbox(
+                get_string("task_type"),
+                [get_string("regular_task"), get_string("milestone")],
+                index=1 if editing_task and editing_task["task_type"] == "milestone" else 0,
+                key="task_type_select"
+            )
+
+        with col2:
+            if task_type == get_string("regular_task"):
+                start_date = st.date_input(
+                    get_string("start_date"),
+                    value=datetime.strptime(editing_task["start_date"], "%Y-%m-%d").date() if editing_task and editing_task["start_date"] else datetime.now().date(),
+                    key="start_date_input"
+                )
+                end_date = st.date_input(
+                    get_string("end_date"),
+                    value=datetime.strptime(editing_task["end_date"], "%Y-%m-%d").date() if editing_task and editing_task["end_date"] else (datetime.now() + timedelta(days=14)).date(),
+                    key="end_date_input"
+                )
+            else:
+                milestone_date = st.date_input(
+                    get_string("milestone_date"),
+                    value=datetime.strptime(editing_task["milestone_date"], "%Y-%m-%d").date() if editing_task and editing_task["milestone_date"] else datetime.now().date(),
+                    key="milestone_date_input"
+                )
+
+        # Team members for task
+        team_names = [t["name"] for t in team]
+        task_team = st.multiselect(
+            get_string("team"),
+            options=team_names,
+            default=editing_task["team_members"] if editing_task else [],
+            key="task_team_select"
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button(f"✅ {get_string('add_task') if not editing_task else get_string('edit_gantt_task')}", use_container_width=True):
+                if task_name:
+                    if editing_task:
+                        # Update task
+                        db.update_gantt_task(
+                            editing_task["id"],
+                            name=task_name,
+                            start_date=start_date.isoformat() if task_type == get_string("regular_task") else None,
+                            end_date=end_date.isoformat() if task_type == get_string("regular_task") else None,
+                            milestone_date=milestone_date.isoformat() if task_type == get_string("milestone") else None,
+                            task_type="milestone" if task_type == get_string("milestone") else "task",
+                            team_members=task_team
+                        )
+                        st.success("Task updated!")
+                        st.session_state.editing_task_id = None
+                    else:
+                        # Create new task
+                        db.create_gantt_task(
+                            project_id=selected_project_id,
+                            name=task_name,
+                            start_date=start_date.isoformat() if task_type == get_string("regular_task") else None,
+                            end_date=end_date.isoformat() if task_type == get_string("regular_task") else None,
+                            milestone_date=milestone_date.isoformat() if task_type == get_string("milestone") else None,
+                            task_type="milestone" if task_type == get_string("milestone") else "task",
+                            team_members=task_team
+                        )
+                        st.success("Task added!")
+                    st.rerun()
+                else:
+                    st.error(f"❌ {get_string('task_name')} {get_string('error')}")
+
+        with col2:
+            if editing_task and st.button("❌ Cancel", use_container_width=True):
+                st.session_state.editing_task_id = None
+                st.rerun()
+
+    with tab2:
+        st.subheader(get_string("generate_gantt"))
+
+        if not gantt_tasks:
+            st.warning(get_string("gantt_no_tasks"))
+            st.info("💡 Use the 'Auto-Generate' button to create tasks from your latest weekly update.")
+        else:
+            st.write(f"📊 Ready to generate Gantt chart with {len(gantt_tasks)} tasks")
+
+            if st.button(f"✨ {get_string('generate_gantt')}", use_container_width=True):
+                with st.spinner(get_string("loading")):
+                    result = generate_gantt_chart_from_tasks(selected_project_id, project["name"])
+
+                    if result["success"]:
+                        st.success(get_string("gantt_generated"))
+
+                        # Provide download button
+                        with open(result["file_path"], "rb") as f:
+                            st.download_button(
+                                label=get_string("download_gantt"),
+                                data=f.read(),
+                                file_name=os.path.basename(result["file_path"]),
+                                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                                use_container_width=True,
+                            )
+                    else:
+                        st.error(f"❌ {result['message']}")
+
+
 # ============= PAGE: SETTINGS =============
 
 def page_settings():
@@ -964,6 +1154,7 @@ def main():
                 "Projects",
                 "Weekly Update",
                 "Slide Generator",
+                "Gantt Chart",
                 "Final Documentation",
                 "Settings",
             ],
@@ -972,6 +1163,7 @@ def main():
                 "Projects": f"📁 {get_string('nav_projects')}",
                 "Weekly Update": f"📝 {get_string('nav_weekly_update')}",
                 "Slide Generator": f"📊 {get_string('nav_slide_generator')}",
+                "Gantt Chart": f"📈 {get_string('gantt_chart_title')}",
                 "Final Documentation": f"📄 {get_string('nav_final_docs')}",
                 "Settings": f"⚙️ {get_string('nav_settings')}",
             }.get(x, x),
@@ -993,6 +1185,8 @@ def main():
         page_weekly_update()
     elif st.session_state.current_page == "Slide Generator":
         page_slide_generator()
+    elif st.session_state.current_page == "Gantt Chart":
+        page_gantt_chart()
     elif st.session_state.current_page == "Final Documentation":
         page_final_documentation()
     elif st.session_state.current_page == "Settings":

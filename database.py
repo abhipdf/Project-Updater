@@ -80,6 +80,23 @@ def init_db():
             )
         """)
 
+        # Gantt chart tasks table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS gantt_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                start_date TEXT,
+                end_date TEXT,
+                team_members TEXT,
+                task_type TEXT DEFAULT 'task',
+                milestone_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )
+        """)
+
         # Settings table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -417,6 +434,117 @@ def delete_weekly_update(update_id: int) -> bool:
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("DELETE FROM weekly_updates WHERE id = ?", (update_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+# Gantt Tasks CRUD
+
+
+def create_gantt_task(
+    project_id: int,
+    name: str,
+    start_date: str = None,
+    end_date: str = None,
+    team_members: list = None,
+    task_type: str = "task",
+    milestone_date: str = None,
+) -> int:
+    """Create a new gantt task. Returns task ID."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        
+        team_members_json = json.dumps(team_members) if team_members else "[]"
+        
+        cursor.execute(
+            """
+            INSERT INTO gantt_tasks
+            (project_id, name, start_date, end_date, team_members, task_type, milestone_date, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (project_id, name, start_date, end_date, team_members_json, task_type, milestone_date, now, now),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_gantt_tasks(project_id: int) -> list:
+    """Get all gantt tasks for a project."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT * FROM gantt_tasks
+            WHERE project_id = ?
+            ORDER BY CASE WHEN task_type = 'milestone' THEN 1 ELSE 0 END,
+                     start_date, milestone_date
+            """,
+            (project_id,),
+        )
+        rows = cursor.fetchall()
+        tasks = []
+        for row in rows:
+            task = dict(row)
+            try:
+                task["team_members"] = json.loads(task["team_members"]) if task["team_members"] else []
+            except (json.JSONDecodeError, TypeError):
+                task["team_members"] = []
+            tasks.append(task)
+        return tasks
+
+
+def update_gantt_task(task_id: int, **kwargs) -> bool:
+    """Update a gantt task."""
+    allowed_fields = [
+        "name",
+        "start_date",
+        "end_date",
+        "team_members",
+        "task_type",
+        "milestone_date",
+    ]
+    
+    updates = {}
+    for key, value in kwargs.items():
+        if key in allowed_fields:
+            if key == "team_members" and isinstance(value, list):
+                updates[key] = json.dumps(value)
+            else:
+                updates[key] = value
+    
+    if not updates:
+        return False
+    
+    updates["updated_at"] = datetime.now().isoformat()
+    
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        set_clause = ", ".join([f"{k} = ?" for k in updates.keys()])
+        values = list(updates.values())
+        values.append(task_id)
+        
+        cursor.execute(
+            f"UPDATE gantt_tasks SET {set_clause} WHERE id = ?", values
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_gantt_task(task_id: int) -> bool:
+    """Delete a gantt task."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM gantt_tasks WHERE id = ?", (task_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_project_gantt_tasks(project_id: int) -> bool:
+    """Delete all gantt tasks for a project."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM gantt_tasks WHERE project_id = ?", (project_id,))
         conn.commit()
         return cursor.rowcount > 0
 
